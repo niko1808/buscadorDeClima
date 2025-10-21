@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Buscador de Clima (Open-Meteo)</title>
+<style>
+  :root{ --bg1:#00b4db; --bg2:#0083b0; --card: rgba(255,255,255,0.12); }
+  body{
+    font-family: Inter, Arial, sans-serif;
+    min-height:100vh; margin:0;
+    display:flex; align-items:center; justify-content:center;
+    background: linear-gradient(135deg,var(--bg1),var(--bg2));
+    color:#fff; padding:24px;
+  }
+  .app{
+    width:100%; max-width:720px;
+    text-align:center;
+  }
+  h1{ margin:0 0 10px; font-size:1.6rem; }
+  form{ margin-top:12px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+  input[type="text"]{
+    padding:10px 12px; border-radius:10px; border:none; min-width:220px;
+    font-size:1rem;
+  }
+  button{
+    padding:10px 14px; border-radius:10px; border:none; cursor:pointer;
+    background:rgba(0,0,0,0.18); color:#fff; font-weight:600;
+  }
+  .card{
+    margin-top:18px; background:var(--card); padding:18px; border-radius:12px;
+    display:inline-block; text-align:left; min-width:260px;
+  }
+  .error{ margin-top:14px; color:#ffdddd; background:rgba(255,0,0,0.08); padding:10px; border-radius:8px; display:inline-block; }
+  .small{ font-size:.9rem; opacity:.9; }
+  img.icon{ width:72px; height:72px; vertical-align:middle; }
+  @media (max-width:420px){ input[type="text"]{min-width:140px;} }
+</style>
+</head>
+<body>
+  <div class="app">
+    <h1>🌤️ Buscador de Clima</h1>
+    <form id="form">
+      <input type="text" id="ciudad" placeholder="Ingresa la ciudad (ej: Buenos Aires)" required />
+      <button type="submit">Buscar</button>
+    </form>
+
+    <div id="mensaje"></div>
+    <div id="resultado"></div>
+  </div>
+
+<script>
+/*
+  Implementación usando Open-Meteo:
+  1) Geocoding: https://geocoding-api.open-meteo.com/v1/search?name=...
+  2) Forecast: https://api.open-meteo.com/v1/forecast?latitude=...&longitude=...&current_weather=true&timezone=auto
+
+  No se necesita API key.
+*/
+
+const form = document.getElementById('form');
+const mensaje = document.getElementById('mensaje');
+const resultado = document.getElementById('resultado');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  resultado.innerHTML = '';
+  mensaje.innerHTML = '';
+  const ciudad = document.getElementById('ciudad').value.trim();
+  if (!ciudad) {
+    mensaje.innerHTML = '<div class="error">Ingresa una ciudad.</div>';
+    return;
+  }
+
+  try {
+    mensaje.innerHTML = 'Buscando ciudad...';
+    // 1) Buscar coordenadas
+    const geourl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(ciudad)}&count=1&language=es`;
+    const geoRes = await fetch(geourl);
+    if (!geoRes.ok) throw new Error('Error en geocoding');
+    const geoData = await geoRes.json();
+
+    if (!geoData.results || geoData.results.length === 0) {
+      mensaje.innerHTML = `<div class="error">Ciudad no encontrada: "${ciudad}". Prueba otra búsqueda.</div>`;
+      return;
+    }
+
+    const place = geoData.results[0];
+    const lat = place.latitude;
+    const lon = place.longitude;
+    const placeName = `${place.name}${place.admin1 ? ', ' + place.admin1 : ''}${place.country ? ' - ' + place.country : ''}`;
+
+    mensaje.innerHTML = 'Obteniendo clima...';
+
+    // 2) Pedir clima actual
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`;
+    const wRes = await fetch(weatherUrl);
+    if (!wRes.ok) throw new Error('Error al obtener clima');
+    const wData = await wRes.json();
+
+    if (!wData.current_weather) {
+      mensaje.innerHTML = `<div class="error">No se encontró información meteorológica para ${placeName}.</div>`;
+      return;
+    }
+
+    const cw = wData.current_weather;
+    // cw: { temperature, windspeed, winddirection, weathercode, time }
+    const desc = weatherCodeToText(cw.weathercode);
+    const iconSvg = weatherCodeToEmoji(cw.weathercode);
+
+    resultado.innerHTML = `
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div>
+            <div style="font-weight:700; font-size:1.1rem;">${placeName}</div>
+            <div class="small">Hora local: ${formatLocalTime(cw.time)}</div>
+          </div>
+          <div style="margin-left:auto; text-align:right;">
+            <div style="font-size:1.8rem; font-weight:700;">${cw.temperature}°C</div>
+            <div class="small">${desc}</div>
+          </div>
+        </div>
+
+        <hr style="margin:12px 0; opacity:0.12;">
+        <div class="small">Viento: ${cw.windspeed} km/h · Dirección: ${Math.round(cw.winddirection)}° · Código: ${cw.weathercode}</div>
+        <div style="margin-top:8px; font-size:2.2rem; text-align:center;">${iconSvg}</div>
+      </div>
+    `;
+
+    mensaje.innerHTML = '';
+  } catch (err) {
+    console.error(err);
+    mensaje.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+  }
+});
+
+function formatLocalTime(isoTime){
+  try {
+    const d = new Date(isoTime);
+    return d.toLocaleString();
+  } catch { return isoTime; }
+}
+
+// Map weathercode from Open-Meteo to human text (simplified)
+function weatherCodeToText(code){
+  const map = {
+    0: 'Despejado',
+    1: 'Principalmente despejado',
+    2: 'Parcialmente nublado',
+    3: 'Nublado',
+    45: 'Niebla',
+    48: 'Deposición de niebla',
+    51: 'Llovizna ligera',
+    53: 'Llovizna moderada',
+    55: 'Llovizna densa',
+    56: 'Llovizna helada ligera',
+    57: 'Llovizna helada densa',
+    61: 'Lluvia ligera',
+    63: 'Lluvia moderada',
+    65: 'Lluvia fuerte',
+    66: 'Lluvia helada ligera',
+    67: 'Lluvia helada fuerte',
+    71: 'Nieve ligera',
+    73: 'Nieve moderada',
+    75: 'Nieve fuerte',
+    77: 'Granizo',
+    80: 'Lluvias intermitentes ligeras',
+    81: 'Lluvias intermitentes moderadas',
+    82: 'Lluvias intermitentes fuertes',
+    85: 'Aguanieve ligera',
+    86: 'Aguanieve fuerte',
+    95: 'Tormenta eléctrica',
+    96: 'Tormenta eléctrica con granizo ligero',
+    99: 'Tormenta eléctrica con granizo fuerte'
+  };
+  return map[code] || 'Condición desconocida';
+}
+
+// Small visual mapping (emoji) para dar un icono rápido
+function weatherCodeToEmoji(code){
+  if (code === 0) return '☀️';
+  if (code === 1 || code === 2) return '🌤️';
+  if (code === 3) return '☁️';
+  if (code >= 45 && code <= 48) return '🌫️';
+  if ((code >= 51 && code <= 57) || (code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️';
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return '❄️';
+  if (code >= 95) return '⛈️';
+  return '🌡️';
+}
+</script>
+</body>
+</html>
